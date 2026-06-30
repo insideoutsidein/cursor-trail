@@ -11,19 +11,24 @@ on:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v2
-      
-    - name: Setup CMake
-      uses: jwlawson/actions-setup-cmake@v2
-      with:
-        cmake-version: 'latest'
+      run: |
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $vsPath = & $vswhere -latest -version "[17.0,18.0)" -products * -requires Microsoft.Component.MSBuild -property installationPath
+        if (-not $vsPath) {
+          Write-Error "Visual Studio 2022 with MSBuild was not found on this runner."
+          exit 1
+        }
+        $msbuildPath = Join-Path $vsPath "MSBuild\Current\Bin"
+        Add-Content -Path $env:GITHUB_PATH -Value $msbuildPath
+        Write-Host "Using Visual Studio at: $vsPath"
+        Write-Host "Added MSBuild to PATH: $msbuildPath"
         
     - name: Download GLFW
       run: |
@@ -39,7 +44,7 @@ jobs:
       run: |
         cmake --version
         Write-Host "Visual Studio installations:"
-        Get-ChildItem "C:\Program Files\Microsoft Visual Studio" -ErrorAction SilentlyContinue
+        & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -products * -requires Microsoft.Component.MSBuild -property installationPath
         Write-Host "MSBuild version:"
         msbuild -version
         Write-Host "GLFW library info:"
@@ -87,11 +92,7 @@ jobs:
         
     - name: Upload release asset (if release)
       if: github.event_name == 'release'
-      uses: actions/upload-release-asset@v1
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: artifacts/CursorTrail.exe
-        asset_name: CursorTrail-Windows-x64.exe
-        asset_content_type: application/octet-stream
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release upload "${{ github.event.release.tag_name }}" "artifacts/CursorTrail.exe#CursorTrail-Windows-x64.exe" --clobber
