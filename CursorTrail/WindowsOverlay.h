@@ -34,6 +34,10 @@ private:
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     void DrawTrail(Gdiplus::Graphics& graphics);
     void AddTrailPart(const TrailPart& part);
+    bool RefreshVirtualScreenBounds();
+    bool CreateBackBuffer();
+    void ReleaseBackBuffer();
+    void EnsureTopMost();
     
     HWND m_hwnd;
     HDC m_hdc;
@@ -41,6 +45,8 @@ private:
     HBITMAP m_hBitmap;
     HBITMAP m_hOldBitmap;
     
+    int m_screenX;
+    int m_screenY;
     int m_screenWidth;
     int m_screenHeight;
     

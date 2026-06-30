@@ -19,6 +19,8 @@ WindowsOverlay::WindowsOverlay()
     , m_memDC(nullptr)
     , m_hBitmap(nullptr)
     , m_hOldBitmap(nullptr)
+    , m_screenX(0)
+    , m_screenY(0)
     , m_screenWidth(0)
     , m_screenHeight(0)
     , m_currentIndex(0)
@@ -44,9 +46,9 @@ bool WindowsOverlay::Initialize()
         return false;
     }
 
-    // Get screen dimensions
-    m_screenWidth = GetSystemMetrics(SM_CXSCREEN);
-    m_screenHeight = GetSystemMetrics(SM_CYSCREEN);
+    // Get the full virtual desktop bounds so every monitor is covered,
+    // including displays positioned left or above the primary monitor.
+    RefreshVirtualScreenBounds();
 
     // Register window class
     WNDCLASSEXW wc = {};
@@ -69,7 +71,7 @@ bool WindowsOverlay::Initialize()
         L"CursorTrailOverlay",
         L"Cursor Trail",
         WS_POPUP,
-        0, 0, m_screenWidth, m_screenHeight,
+        m_screenX, m_screenY, m_screenWidth, m_screenHeight,
         nullptr, nullptr, GetModuleHandle(nullptr), this
     );
 
@@ -83,20 +85,13 @@ bool WindowsOverlay::Initialize()
     // We'll use UpdateLayeredWindow for all transparency control
 
     // Create memory DC for double buffering
-    m_hdc = GetDC(m_hwnd);
-    m_memDC = CreateCompatibleDC(m_hdc);
-    
-    BITMAPINFO bmi = {};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = m_screenWidth;
-    bmi.bmiHeader.biHeight = -m_screenHeight; // Top-down DIB
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    void* pBits;
-    m_hBitmap = CreateDIBSection(m_memDC, &bmi, DIB_RGB_COLORS, &pBits, nullptr, 0);
-    m_hOldBitmap = (HBITMAP)SelectObject(m_memDC, m_hBitmap);
+    if (!CreateBackBuffer()) {
+        std::cerr << "Failed to create overlay back buffer" << std::endl;
+        DestroyWindow(m_hwnd);
+        m_hwnd = nullptr;
+        GdiplusShutdown(m_gdiplusToken);
+        return false;
+    }
 
     // Load trail texture from configuration
     // Try multiple paths to find the texture file
@@ -148,11 +143,114 @@ bool WindowsOverlay::Initialize()
 
     ShowWindow(m_hwnd, SW_SHOW);
     UpdateWindow(m_hwnd);
+    EnsureTopMost();
     
     std::cout << "Windows overlay window created and shown successfully!" << std::endl;
-    std::cout << "Screen size: " << m_screenWidth << "x" << m_screenHeight << std::endl;
+    std::cout << "Virtual screen bounds: " << m_screenX << "," << m_screenY
+              << " " << m_screenWidth << "x" << m_screenHeight << std::endl;
 
     return true;
+}
+
+bool WindowsOverlay::RefreshVirtualScreenBounds()
+{
+    m_screenX = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    m_screenY = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    m_screenWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    m_screenHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+    if (m_screenWidth <= 0 || m_screenHeight <= 0) {
+        m_screenX = 0;
+        m_screenY = 0;
+        m_screenWidth = GetSystemMetrics(SM_CXSCREEN);
+        m_screenHeight = GetSystemMetrics(SM_CYSCREEN);
+    }
+
+    return m_screenWidth > 0 && m_screenHeight > 0;
+}
+
+bool WindowsOverlay::CreateBackBuffer()
+{
+    if (!m_hwnd || m_screenWidth <= 0 || m_screenHeight <= 0) {
+        return false;
+    }
+
+    ReleaseBackBuffer();
+
+    m_hdc = GetDC(m_hwnd);
+    if (!m_hdc) {
+        return false;
+    }
+
+    m_memDC = CreateCompatibleDC(m_hdc);
+    if (!m_memDC) {
+        ReleaseDC(m_hwnd, m_hdc);
+        m_hdc = nullptr;
+        return false;
+    }
+
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = m_screenWidth;
+    bmi.bmiHeader.biHeight = -m_screenHeight; // Top-down DIB
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* pBits = nullptr;
+    m_hBitmap = CreateDIBSection(m_memDC, &bmi, DIB_RGB_COLORS, &pBits, nullptr, 0);
+    if (!m_hBitmap) {
+        ReleaseBackBuffer();
+        return false;
+    }
+
+    m_hOldBitmap = (HBITMAP)SelectObject(m_memDC, m_hBitmap);
+    if (!m_hOldBitmap) {
+        ReleaseBackBuffer();
+        return false;
+    }
+
+    return true;
+}
+
+void WindowsOverlay::ReleaseBackBuffer()
+{
+    if (m_hOldBitmap && m_memDC) {
+        SelectObject(m_memDC, m_hOldBitmap);
+        m_hOldBitmap = nullptr;
+    }
+
+    if (m_hBitmap) {
+        DeleteObject(m_hBitmap);
+        m_hBitmap = nullptr;
+    }
+
+    if (m_memDC) {
+        DeleteDC(m_memDC);
+        m_memDC = nullptr;
+    }
+
+    if (m_hdc && m_hwnd) {
+        ReleaseDC(m_hwnd, m_hdc);
+        m_hdc = nullptr;
+    }
+}
+
+void WindowsOverlay::EnsureTopMost()
+{
+    if (!m_hwnd) {
+        return;
+    }
+
+    SetWindowPos(
+        m_hwnd,
+        HWND_TOPMOST,
+        m_screenX,
+        m_screenY,
+        m_screenWidth,
+        m_screenHeight,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW
+    );
 }
 
 void WindowsOverlay::Update()
@@ -227,6 +325,24 @@ void WindowsOverlay::Render()
 {
     if (!m_hwnd || !m_memDC) return;
 
+    int oldX = m_screenX;
+    int oldY = m_screenY;
+    int oldWidth = m_screenWidth;
+    int oldHeight = m_screenHeight;
+
+    if (RefreshVirtualScreenBounds() &&
+        (oldX != m_screenX || oldY != m_screenY ||
+         oldWidth != m_screenWidth || oldHeight != m_screenHeight)) {
+        EnsureTopMost();
+
+        if (!CreateBackBuffer()) {
+            std::cerr << "Failed to recreate overlay back buffer after display change" << std::endl;
+            return;
+        }
+    } else {
+        EnsureTopMost();
+    }
+
     // Clear the memory DC with fully transparent pixels using Graphics
     Graphics clearGraphics(m_memDC);
     clearGraphics.Clear(Color(0, 0, 0, 0)); // Fully transparent
@@ -240,6 +356,7 @@ void WindowsOverlay::Render()
     DrawTrail(graphics);
 
     // Update the layered window
+    POINT ptDst = { m_screenX, m_screenY };
     POINT ptSrc = { 0, 0 };
     SIZE sizeWnd = { m_screenWidth, m_screenHeight };
     BLENDFUNCTION bf = {};
@@ -248,7 +365,7 @@ void WindowsOverlay::Render()
     bf.SourceConstantAlpha = 255;
     bf.AlphaFormat = AC_SRC_ALPHA;
 
-    UpdateLayeredWindow(m_hwnd, nullptr, nullptr, &sizeWnd, m_memDC, &ptSrc, RGB(0, 0, 0), &bf, ULW_ALPHA);
+    UpdateLayeredWindow(m_hwnd, nullptr, &ptDst, &sizeWnd, m_memDC, &ptSrc, RGB(0, 0, 0), &bf, ULW_ALPHA);
 }
 
 void WindowsOverlay::DrawTrail(Graphics& graphics)
@@ -281,8 +398,8 @@ void WindowsOverlay::DrawTrail(Graphics& graphics)
             // Draw the trail sprite at fixed size (same as OpenGL version)
             // Position sprite centered on the trail point
             RectF destRect(
-                part.x - spriteSize / 2.0f,
-                part.y - spriteSize / 2.0f,
+                part.x - static_cast<float>(m_screenX) - spriteSize / 2.0f,
+                part.y - static_cast<float>(m_screenY) - spriteSize / 2.0f,
                 spriteSize,
                 spriteSize
             );
@@ -311,25 +428,7 @@ void WindowsOverlay::DrawTrail(Graphics& graphics)
 
 void WindowsOverlay::Cleanup()
 {
-    if (m_hOldBitmap && m_memDC) {
-        SelectObject(m_memDC, m_hOldBitmap);
-        m_hOldBitmap = nullptr;
-    }
-    
-    if (m_hBitmap) {
-        DeleteObject(m_hBitmap);
-        m_hBitmap = nullptr;
-    }
-    
-    if (m_memDC) {
-        DeleteDC(m_memDC);
-        m_memDC = nullptr;
-    }
-    
-    if (m_hdc && m_hwnd) {
-        ReleaseDC(m_hwnd, m_hdc);
-        m_hdc = nullptr;
-    }
+    ReleaseBackBuffer();
     
     if (m_hwnd) {
         DestroyWindow(m_hwnd);
