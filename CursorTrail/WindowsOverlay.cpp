@@ -13,6 +13,42 @@
 
 using namespace Gdiplus;
 
+namespace
+{
+#ifndef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+#define DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 ((DPI_AWARENESS_CONTEXT)-4)
+#endif
+
+void ConfigureDpiAwareness()
+{
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (!user32) {
+        return;
+    }
+
+    using SetProcessDpiAwarenessContextFn = BOOL(WINAPI*)(DPI_AWARENESS_CONTEXT);
+    auto setProcessDpiAwarenessContext =
+        reinterpret_cast<SetProcessDpiAwarenessContextFn>(
+            GetProcAddress(user32, "SetProcessDpiAwarenessContext")
+        );
+
+    if (setProcessDpiAwarenessContext &&
+        setProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
+        return;
+    }
+
+    using SetProcessDPIAwareFn = BOOL(WINAPI*)();
+    auto setProcessDPIAware =
+        reinterpret_cast<SetProcessDPIAwareFn>(
+            GetProcAddress(user32, "SetProcessDPIAware")
+        );
+
+    if (setProcessDPIAware) {
+        setProcessDPIAware();
+    }
+}
+}
+
 WindowsOverlay::WindowsOverlay()
     : m_hwnd(nullptr)
     , m_hdc(nullptr)
@@ -39,6 +75,8 @@ WindowsOverlay::~WindowsOverlay()
 
 bool WindowsOverlay::Initialize()
 {
+    ConfigureDpiAwareness();
+
     // Initialize GDI+
     GdiplusStartupInput gdiplusStartupInput;
     if (GdiplusStartup(&m_gdiplusToken, &gdiplusStartupInput, nullptr) != Ok) {
