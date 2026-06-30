@@ -291,9 +291,10 @@ void WindowsOverlay::EnsureTopMost()
     );
 }
 
-void WindowsOverlay::Update()
+void WindowsOverlay::Update(double frameScale)
 {
     if (!m_hwnd) return;
+    frameScale = (std::max)(0.0, (std::min)(4.0, frameScale));
 
     // Get global cursor position
     POINT cursorPos;
@@ -329,23 +330,12 @@ void WindowsOverlay::Update()
             }
         }
         
-        // Debug output (first few seconds only)
-        static int debugCounter = 0;
-        if (debugCounter < 60) { // Print for first 60 frames only
-            std::cout << "Cursor at: " << cursorPos.x << "," << cursorPos.y << " Trail parts active: ";
-            int activeCount = 0;
-            for (const auto& part : m_trailParts) {
-                if (part.time > 0.0f) activeCount++;
-            }
-            std::cout << activeCount << std::endl;
-            debugCounter++;
-        }
     }
 
     // Update trail fade times - use configurable fade rate
     for (auto& part : m_trailParts) {
         if (part.time > 0.0f) {
-            part.time -= g_config.fadeRate;
+            part.time -= static_cast<float>(g_config.fadeRate * frameScale);
             if (part.time < 0.0f) {
                 part.time = 0.0f;
             }
@@ -408,7 +398,6 @@ void WindowsOverlay::Render()
 
 void WindowsOverlay::DrawTrail(Graphics& graphics)
 {
-    int drawnCount = 0;
     for (const auto& part : m_trailParts) {
         if (part.time > 0.0f) {
             // Calculate alpha to match OpenGL version exactly (use time directly as alpha)
@@ -449,18 +438,7 @@ void WindowsOverlay::DrawTrail(Graphics& graphics)
                 UnitPixel,
                 &imageAttributes
             );
-            
-            drawnCount++;
         }
-    }
-    
-    // Debug output for first few frames
-    static int frameCount = 0;
-    if (frameCount < 120) { // Print for first 120 frames
-        if (frameCount % 30 == 0) { // Every 30 frames (about twice per second)
-            std::cout << "Frame " << frameCount << ": Drawing " << drawnCount << " trail parts" << std::endl;
-        }
-        frameCount++;
     }
 }
 

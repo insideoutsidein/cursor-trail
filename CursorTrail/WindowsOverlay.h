@@ -24,7 +24,7 @@ public:
     ~WindowsOverlay();
     
     bool Initialize();
-    void Update();
+    void Update(double frameScale = 1.0);
     void Render();
     void Cleanup();
     

@@ -9,6 +9,7 @@
 #include "WindowsOverlay.h"
 #endif
 
+#include <chrono>
 #include <iostream>
 
 // GLFW function declarations
@@ -46,7 +47,9 @@ int main(int argc, char* argv[])
         
         // Main loop for Windows overlay
         MSG msg = {};
-        auto lastUpdate = GetTickCount64();
+        using clock = std::chrono::steady_clock;
+        constexpr auto targetFrameTime = std::chrono::duration<double>(1.0 / 120.0);
+        auto lastUpdate = clock::now();
         
         while (true) {
             // Process Windows messages
@@ -58,16 +61,18 @@ int main(int argc, char* argv[])
                 DispatchMessage(&msg);
             }
             
-            // Update and render at ~60fps
-            auto currentTime = GetTickCount64();
-            if (currentTime - lastUpdate >= 16) { // ~60fps
-                overlay.Update();
+            // Update and render at ~120fps for lower cursor latency.
+            auto currentTime = clock::now();
+            auto elapsed = currentTime - lastUpdate;
+            if (elapsed >= targetFrameTime) {
+                double frameScale = std::chrono::duration<double>(elapsed).count() / (1.0 / 60.0);
+                overlay.Update(frameScale);
                 overlay.Render();
                 lastUpdate = currentTime;
             }
             
-            // Small sleep to prevent 100% CPU usage
-            Sleep(1);
+            // Yield without adding timer-granularity latency to cursor tracking.
+            Sleep(0);
         }
         
     cleanup:
